@@ -1,7 +1,4 @@
-project("PIOSS Lite" VERSION 1.0 
-                     DESCRIPTION "Parallel I/O and Storage System (PIOSS) simulation model; Lite Version"
-                     LANGUAGES C)
-
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_subdirectory(util)
 add_subdirectory(core)
 add_subdirectory(file_dists)

@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "num_dts": 16,
+  "num_files": [
+    32
+  ],
+  "total_bytes": 536870912,
+  "workload_cvs": [
+    0,
+    1
+  ],
+  "stripe_widths": [
+    1,
+    4,
+    16
+  ],
+  "stripe_size": 1048576,
+  "sample_sizes": [
+    1,
+    2,
+    4,
+    16
+  ],
+  "policies": [
+    "Random",
+    "RoundRobin",
+    "N2R2",
+    "LeastLoaded",
+    "PowerOfD"
+  ],
+  "repetitions": 5,
+  "workload_seed": 42001,
+  "policy_seed": 42002,
+  "analysis_seed": 42003,
+  "bootstrap_samples": 2000,
+  "relevance_threshold": 0.05
+}

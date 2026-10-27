@@ -14,12 +14,9 @@ enum TAG_ENUM
   FOREACH_TAG(GENERATE_ENUM)
 };
 
-static const char *TAG_STRING[] =
-  { FOREACH_TAG(GENERATE_STRING) };
-
 void
-log (enum TAG_ENUM tag, const char *message);
+pioss_log(enum TAG_ENUM tag, const char *message);
 void
-logf (enum TAG_ENUM tag, const char *format, ...);
+pioss_logf(enum TAG_ENUM tag, const char *format, ...);
 
 #endif

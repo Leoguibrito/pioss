@@ -1,5 +1,3 @@
-project(tinymt)
-
 add_library(tinymt tinymt32.c)
 
 target_include_directories(tinymt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

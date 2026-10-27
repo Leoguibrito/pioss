@@ -1,42 +1,22 @@
 #include "dts.h"
-
 #include "memalloc.h"
-
+#include "logger.h"
 #include <stdlib.h>
-
-typedef struct dts_st
+static dts_results state;
+void dts_init(uint32_t n)
 {
-  uint32_t num_dts;
-  uint64_t *bytes_stored;
-} dts_st;
-
-static dts_st state;
-
-void
-dts_init (uint32_t num_dts)
-{
-  state.num_dts = num_dts;
-  state.bytes_stored = calloc_assert (num_dts, sizeof(uint64_t));
+  state.num_dts=n;state.bytes_stored=calloc_assert(n,sizeof(uint64_t));
 }
-
-void
-dts_store (uint32_t dtsind, uint64_t bytes)
+void dts_store(uint32_t server,uint64_t bytes)
 {
-  state.bytes_stored[dtsind] += bytes;
+  if(server>=state.num_dts || bytes>UINT64_MAX-state.bytes_stored[server]) {
+    pioss_log(ERROR,"Invalid DTS index or byte overflow");exit(EXIT_FAILURE);
+  }
+  state.bytes_stored[server]+=bytes;
 }
-
-void
-dts_clean ()
+uint64_t dts_load(uint32_t server) { return state.bytes_stored[server]; }
+void dts_clean(void) { free(state.bytes_stored);state.bytes_stored=NULL; }
+dts_results *dts_get_results(void)
 {
-  free (state.bytes_stored);
-}
-
-dts_results*
-dts_get_results ()
-{
-  dts_results *results = malloc_assert (sizeof(dts_results));
-  results->num_dts = state.num_dts;
-  results->bytes_stored = state.bytes_stored;
-
-  return results;
+  dts_results *r=malloc_assert(sizeof(*r));*r=state;return r;
 }

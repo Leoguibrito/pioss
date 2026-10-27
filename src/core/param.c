@@ -1,299 +1,124 @@
 #include "param.h"
-
 #include "file_dist.h"
 #include "logger.h"
 #include "memalloc.h"
 #include "timing.h"
 #include "types.h"
-
-#include <assert.h>
 #include <errno.h>
 #include <getopt.h>
-#include <stddef.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-
-static const struct option long_opts[] =
-  {
-    { "num_cli", required_argument, NULL, 'n' },
-    { "data_size", required_argument, NULL, 'b' },
-    { "shared", no_argument, NULL, 's' },
-    { "num_dts", required_argument, NULL, 'm' },
-    { "stripe_width", required_argument, NULL, 'w' },
-    { "stripe_size", required_argument, NULL, 'z' },
-    { "file_dist", required_argument, NULL, 'f' },
-    { "rng_seed", required_argument, NULL, 'r' },
-    { "out_path", required_argument, NULL, 'o' },
-    { "quiet", no_argument, NULL, 'q' },
-    { "help", no_argument, NULL, 'h' },
-    { NULL, 0, NULL, 0 } };
-
-static const char short_opts[] = "n:b:sm:w:z:f:r:o:qh";
-
-static int
-param_parse_uint32 (char *str, uint32_t *val)
+int parse_uint64(const char *text,uint64_t *value)
 {
-  assert(str);
-
-  char *endptr;
-
-  *val = strtoul (str, &endptr, 10);
-
-  if ((errno == ERANGE && *val == UINT_MAX) || (errno != 0 && *val == 0)
-      || (endptr == str) || (*endptr != '\0'))
-    {
-      return errno;
-    }
-
+  if (!text || !*text) return 1;
+  for (const char *p=text; *p; ++p) if (*p<'0' || *p>'9') return 1;
+  errno=0;
+  char *end;
+  uintmax_t parsed=strtoumax(text,&end,10);
+  if (errno || *end || parsed>UINT64_MAX) return 1;
+  *value=(uint64_t)parsed;
   return 0;
 }
-
-static int
-param_parse_uint64 (char *str, uint64_t *val)
+static int copy_arg(char *dest,size_t capacity,const char *arg)
 {
-  assert(str);
-
-  char *endptr;
-
-  *val = strtoull (str, &endptr, 10);
-
-  if ((errno == ERANGE && *val == UINT_MAX) || (errno != 0 && *val == 0)
-      || (endptr == str) || (*endptr != '\0'))
-    {
-      return errno;
-    }
-
+  if (!*arg || strlen(arg)>=capacity) return 1;
+  strcpy(dest,arg);
   return 0;
 }
-
-static void
-param_usage (char **argv)
+static void usage(const char *exe)
 {
-  fprintf (stderr, "usage: %s [OPTIONS]\n\n", *argv);
-  fputs (
-      "OPTIONS:\n"
-      "--num_cli=NUM | -n NUM      : number of simulated clients\n"
-      "--data_size=NUM | -b NUM    : bytes transferred per simulated client\n"
-      "--shared | -s               : on = single shared file; off = file per process\n"
-      "--num_dts=NUM | -m NUM      : number of data servers\n"
-      "--stripe_width=NUM | -w NUM : number of data servers per file\n"
-      "--stripe_size=NUM | -z NUM  : size of a file chunk\n"
-      "--file_dist=STR | -f STR    : file distribution algorithm\n"
-      "--rng_seed=NUM | -r NUM     : seed for random number generation\n"
-      "--out_path=STR | -o STR     : path for outputing simulation results\n"
-      "--quiet | -q                : do not display parameters and results\n"
-      "--help | -h                 : show this command-line options\n"
-      "\n",
-      stderr);
-  fflush (stderr);
+  fprintf(stderr,
+    "usage: %s [OPTIONS]\n"
+    "  --num_cli/-n N       clients (default 1)\n"
+    "  --data_size/-b B     bytes per client (default 1048576)\n"
+    "  --shared/-s          shared file (legacy policies only)\n"
+    "  --num_dts/-m N       data servers (default 2)\n"
+    "  --stripe_width/-w W  servers per file (default 1)\n"
+    "  --stripe_size/-z B   stripe fragment bytes (default 65536)\n"
+    "  --file_dist/-f NAME  Random, RoundRobin, N2R2, PowerOfD, LeastLoaded\n"
+    "  --rng_seed/-r SEED   policy seed (uint32; default clock-derived)\n"
+    "  --workload_path P    exactly num_cli positive byte sizes, one per line\n"
+    "  --sample_size D      candidates per destination; PowerOfD only\n"
+    "  --out_path/-o P      legacy DTS,Bytes CSV (file or existing directory)\n"
+    "  --results_dir P     new directory with CSV files and summary.json\n"
+    "  --quiet/-q          suppress screen output\n"
+    "  --help/-h           show this help\n",exe);
 }
-
-static void
-param_default (param *param)
+int param_parse(int argc,char **argv,param *p)
 {
-  param->num_cli = 1;
-  param->data_size = MIB;
-  param->is_shared = false;
-  param->num_dts = 2;
-  param->stripe_width = 1;
-  param->stripe_size = 64 * KIB;
-  strncpy (&(param->file_dist[0]), FD_RANDOM, strlen (FD_RANDOM));
-  param->rng_seed = (uint32_t) (usectime () * 1e6);
-  param->is_quiet = false;
-}
-
-int
-param_parse (int argc, char **argv, param *param)
-{
-  assert(param);
-
-  int c = 0;
-  int optind = 0;
-  bool error = 0;
-  size_t len = 0;
-
-  param_default (param);
-  opterr = 0;
-
-  while ((c = getopt_long (argc, argv, short_opts, long_opts, &optind)) != -1)
-    {
-      switch (c)
-	{
-	case 'n':
-	  if (param_parse_uint32 (optarg, &(param->num_cli)))
-	    {
-	      logf (ERROR, "Invalid value for option --num_cli/-n: %s", optarg);
-	      error = true;
-	    }
-	  break;
-	case 'b':
-	  if (param_parse_uint64 (optarg, &(param->data_size)))
-	    {
-	      logf (ERROR, "Invalid value for option --data_size/-b: %s",
-		    optarg);
-	      error = true;
-	    }
-	  break;
-	case 's':
-	  param->is_shared = true;
-	  break;
-	case 'm':
-	  if (param_parse_uint32 (optarg, &(param->num_dts)))
-	    {
-	      logf (ERROR, "Invalid value for option --num_dts/-m: %s", optarg);
-	      error = true;
-	    }
-	  break;
-	case 'w':
-	  if (param_parse_uint32 (optarg, &(param->stripe_width)))
-	    {
-	      logf (ERROR, "Invalid value for option --stripe_width/-w: %s",
-		    optarg);
-	      error = true;
-	    }
-	  break;
-	case 'z':
-	  if (param_parse_uint64 (optarg, &(param->stripe_size)))
-	    {
-	      logf (ERROR, "Invalid value for option --stripe_size/-z: %s",
-		    optarg);
-	      error = true;
-	    }
-	  break;
-	case 'f':
-	  if (strlen (optarg) > MAX_FILE_DIST_NAME)
-	    {
-	      logf (ERROR, "Invalid value for option --file_dist/-f: %s",
-		    optarg);
-	      error = true;
-	    }
-	  else
-	    strncpy (&(param->file_dist[0]), optarg, MAX_FILE_DIST_NAME);
-	  break;
-	case 'r':
-	  if (param_parse_uint32 (optarg, &(param->rng_seed)))
-	    {
-	      logf (ERROR, "Invalid value for option --rng_seed/-r: %s",
-		    optarg);
-	      error = true;
-	    }
-	  break;
-	case 'o':
-	  if (strlen (optarg) > PATH_MAX)
-	    {
-	      logf (ERROR, "Invalid value for option --out_path/-o: %s",
-		    optarg);
-	      error = true;
-	    }
-	  else
-	    strncpy (&(param->out_path[0]), optarg, PATH_MAX);
-	  break;
-	case 'q':
-	  param->is_quiet = true;
-	  break;
-	case 'h':
-	  param_usage (argv);
-	  exit (EXIT_SUCCESS);
-	case '?':
-	default:
-	  logf (ERROR, "Invalid option: %c", optopt);
-	  error = true;
-	}
+  *p=(param){.num_cli=1,.data_size=MIB,.num_dts=2,.stripe_width=1,
+             .stripe_size=64*KIB,.rng_seed=(uint32_t)((uint64_t)(usectime()*1e6))};
+  strcpy(p->file_dist,FD_RANDOM);
+  enum { WORKLOAD=256,SAMPLE,RESULTS };
+  const struct option opts[]={
+    {"num_cli",1,0,'n'},{"data_size",1,0,'b'},{"shared",0,0,'s'},
+    {"num_dts",1,0,'m'},{"stripe_width",1,0,'w'},{"stripe_size",1,0,'z'},
+    {"file_dist",1,0,'f'},{"rng_seed",1,0,'r'},{"out_path",1,0,'o'},
+    {"quiet",0,0,'q'},{"help",0,0,'h'},{"workload_path",1,0,WORKLOAD},
+    {"sample_size",1,0,SAMPLE},{"results_dir",1,0,RESULTS},{0,0,0,0}};
+  optind=0; opterr=0;
+  int c,error=0;
+  while ((c=getopt_long(argc,argv,"n:b:sm:w:z:f:r:o:qh",opts,NULL))!=-1) {
+    uint64_t number=0;
+    switch(c) {
+    case 'n': case 'm': case 'w': case 'r': case SAMPLE:
+      if (parse_uint64(optarg,&number) || number>UINT32_MAX) { error=1; break; }
+      if (c=='n') p->num_cli=(uint32_t)number;
+      if (c=='m') p->num_dts=(uint32_t)number;
+      if (c=='w') p->stripe_width=(uint32_t)number;
+      if (c=='r') p->rng_seed=(uint32_t)number;
+      if (c==SAMPLE) { p->sample_size=(uint32_t)number; p->explicit_sample_size=true; }
+      break;
+    case 'b': p->explicit_data_size=true; error|=parse_uint64(optarg,&p->data_size); break;
+    case 'z': error|=parse_uint64(optarg,&p->stripe_size); break;
+    case 's': p->is_shared=true; break;
+    case 'q': p->is_quiet=true; break;
+    case 'f': error|=copy_arg(p->file_dist,sizeof(p->file_dist),optarg); break;
+    case 'o': error|=copy_arg(p->out_path,sizeof(p->out_path),optarg); break;
+    case WORKLOAD: error|=copy_arg(p->workload_path,sizeof(p->workload_path),optarg); break;
+    case RESULTS: error|=copy_arg(p->results_dir,sizeof(p->results_dir),optarg); break;
+    case 'h': usage(argv[0]); exit(EXIT_SUCCESS);
+    default: error=1; break;
     }
-
-  if (optind > 0 && optind < argc)
-    {
-      error = true;
-      while (optind < argc)
-	logf (ERROR, "Invalid argument: %s", argv[optind++]);
-    }
-
-  if (error)
-    param_usage (argv);
-
+  }
+  if (optind<argc) error=1;
+  if (error) { pioss_log(ERROR,"Invalid option or numeric argument"); usage(argv[0]); }
   return error;
 }
-
-int
-param_validate (const param param)
+int param_validate(param p)
 {
-  int error = 0;
-
-  if (param.num_cli == 0)
-    {
-      log (ERROR, "'num_cli' must be greater than zero");
-      error = 1;
-    }
-
-  if (param.data_size == 0)
-    {
-      log (ERROR, "'data_size' must be greater than zero");
-      error = 1;
-    }
-
-  if (param.num_dts == 0)
-    {
-      log (ERROR, "'num_dts' must be greater than zero");
-      error = 1;
-    }
-
-  if (param.stripe_width == 0)
-    {
-      log (ERROR, "'stripe_width' must be greater than zero");
-      error = 1;
-    }
-  else if (param.stripe_width > param.num_dts)
-    {
-      log (ERROR, "'stripe_width' cannot be greater than 'num_dts'");
-      error = 1;
-    }
-
-  if (strcmp (FD_RANDOM, param.file_dist) != 0
-      && strcmp (FD_ROUNDROBIN, param.file_dist) != 0
-      && strcmp (FD_N2R2, param.file_dist) != 0)
-    {
-      logf (ERROR, "'file_dist' must be one of the following: %s, %s, %s",
-	    (FD_RANDOM), (FD_ROUNDROBIN), (FD_N2R2));
-      error = 1;
-    }
-
-  return error;
+  bool power=!strcmp(p.file_dist,FD_POWER);
+  bool informed=power || !strcmp(p.file_dist,FD_LEAST);
+  bool known=informed || !strcmp(p.file_dist,FD_RANDOM) ||
+             !strcmp(p.file_dist,FD_ROUNDROBIN) || !strcmp(p.file_dist,FD_N2R2);
+  if (!known || !p.num_cli || !p.num_dts || !p.stripe_width ||
+      p.stripe_width>p.num_dts || !p.stripe_size || !p.data_size ||
+      (power && (!p.explicit_sample_size || !p.sample_size || p.sample_size>p.num_dts)) ||
+      (!power && p.explicit_sample_size) ||
+      (p.workload_path[0] && (p.explicit_data_size || p.is_shared)) ||
+      (informed && p.is_shared) || (p.out_path[0] && p.results_dir[0]) ||
+      (!p.workload_path[0] && p.data_size>UINT64_MAX/p.num_cli)) {
+    pioss_log(ERROR,"Invalid configuration: check positive sizes/counts, width, policy options, "
+                    "workload/shared conflicts, output conflicts and total-byte overflow");
+    return 1;
+  }
+  return 0;
 }
-
-char*
-param_tostr (const param param)
+char *param_tostr(param p)
 {
-  const char *format =
-      "** Parameters **********************************************\n"
-	  "\n"
-	  "      num_cli = %u\n"
-	  "    data_size = %lu\n"
-	  "    is_shared = %s\n"
-	  "      num_dts = %u\n"
-	  " stripe_width = %u\n"
-	  "  stripe_size = %lu\n"
-	  "    file_dist = %s\n"
-	  "     rng_seed = %u\n"
-	  "     out_path = %s\n"
-	  "\n"
-	  "************************************************************\n\n";
-
-  char *content;
-  int len = snprintf (content, 0, format, param.num_cli, param.data_size,
-		      (param.is_shared ? "true" : "false"), param.num_dts,
-		      param.stripe_width, param.stripe_size, param.file_dist,
-		      param.rng_seed, param.out_path);
-  if (len > 0)
-    {
-      len++;
-      content = malloc_assert (len);
-      snprintf (content, len, format, param.num_cli, param.data_size,
-		(param.is_shared ? "true" : "false"), param.num_dts,
-		param.stripe_width, param.stripe_size, param.file_dist,
-		param.rng_seed, param.out_path);
-    }
-
-  return content;
+  const char *format=
+    "num_cli=%"PRIu32" data_size=%"PRIu64" shared=%s num_dts=%"PRIu32"\n"
+    "stripe_width=%"PRIu32" stripe_size=%"PRIu64" file_dist=%s rng_seed=%"PRIu32"\n"
+    "sample_size=%"PRIu32" workload_path=%s out_path=%s results_dir=%s";
+  int len=snprintf(NULL,0,format,p.num_cli,p.data_size,p.is_shared?"true":"false",
+      p.num_dts,p.stripe_width,p.stripe_size,p.file_dist,p.rng_seed,p.sample_size,
+      p.workload_path,p.out_path,p.results_dir);
+  if (len<0) return NULL;
+  char *out=malloc_assert((size_t)len+1);
+  snprintf(out,(size_t)len+1,format,p.num_cli,p.data_size,p.is_shared?"true":"false",
+      p.num_dts,p.stripe_width,p.stripe_size,p.file_dist,p.rng_seed,p.sample_size,
+      p.workload_path,p.out_path,p.results_dir);
+  return out;
 }
